@@ -23,7 +23,9 @@ import org.codehaus.groovy.ast.ClassNode
 import org.codehaus.groovy.ast.MethodNode
 import org.codehaus.groovy.ast.tools.WideningCategories
 import org.codehaus.groovy.classgen.GeneratorContext
+import org.codehaus.groovy.control.CompilationUnit
 import org.codehaus.groovy.control.CompilePhase
+import org.codehaus.groovy.control.CompilerConfiguration
 import org.codehaus.groovy.control.SourceUnit
 import org.codehaus.groovy.control.customizers.CompilationCustomizer
 import org.codehaus.groovy.transform.stc.StaticTypesMarker
@@ -928,6 +930,66 @@ class TypeInferenceSTCTest extends StaticTypeCheckingTestCase {
                 println b
             }
         '''
+    }
+
+    // GROOVY-7549
+    void testShouldKeepDeclTypeWhenAssignedInaccessibleT() {
+        def cc = new CompilerConfiguration(config)
+        cc.addCompilationCustomizers(*config.compilationCustomizers) // GROOVY-9585: delete this line once fixed
+        cc.targetDirectory = File.createTempDir()
+        def parentDir = File.createTempDir()
+        try {
+            new File(parentDir, 'a').mkdir()
+            new File(parentDir, 'b').mkdir()
+
+            def a = new File(parentDir, 'a/Main.groovy')
+            a.write '''
+                package a
+                class Main {
+                  static main(args) {
+                    Face f = b.Maker.make() // returns b.Impl
+                    assert f.meth() == 1234
+                  }
+                }
+            '''
+            def b = new File(parentDir, 'a/Face.groovy')
+            b.write '''
+                package a
+                interface Face {
+                  int meth()
+                }
+            '''
+            def c = new File(parentDir, 'b/Impl.groovy')
+            c.write '''
+                package b
+                @groovy.transform.PackageScope
+                class Impl implements a.Face {
+                  int meth() {
+                    1234
+                  }
+                }
+            '''
+            def d = new File(parentDir, 'b/Maker.groovy')
+            d.write '''
+                package b
+                class Maker {
+                  static Impl make() { // probably should return a.Face
+                    new Impl()
+                  }
+                }
+            '''
+
+            def loader = new GroovyClassLoader(this.class.classLoader)
+            def cu = new CompilationUnit(cc, null, loader)
+            cu.addSources(a, b, c, d)
+            cu.compile()
+
+            loader.addClasspath(cc.targetDirectory.absolutePath)
+            loader.loadClass('a.Main', true).main()
+        } finally {
+            cc.targetDirectory.deleteDir()
+            parentDir.deleteDir()
+        }
     }
 
     // GROOVY-9077
